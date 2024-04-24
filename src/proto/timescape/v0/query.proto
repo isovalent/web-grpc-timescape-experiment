@@ -1,0 +1,396 @@
+// Copyright (C) Isovalent, Inc. - All Rights Reserved.
+//
+// NOTICE: All information contained herein is, and remains the property of
+// Isovalent Inc and its suppliers, if any. The intellectual and technical
+// concepts contained herein are proprietary to Isovalent Inc and its suppliers
+// and may be covered by U.S. and Foreign Patents, patents in process, and are
+// protected by trade secret or copyright law.  Dissemination of this
+// information or reproduction of this material is strictly forbidden unless
+// prior written permission is obtained from Isovalent Inc.
+
+// Motivation and Principles
+// ==========================
+//
+// We want to offer the ability to timescape users to interactively explore
+// data. We base our approach on the ability to fully parametrize queries, and
+// making associations between results of a query and new queries.
+//
+// We don't want to expose the underlying schema for a number of reasons:
+// * The queries on the schema might include complicated joins (e.g., to get
+//   the process hierarchy), other complicated operations, and required
+//   performance optimizations that render the queries hard to write. We do not
+//   want to burden users with this.
+// * We might want to change the underlying schema
+//
+// Moreover, we want to perform proper authorization over what data are visible
+// for each user (RBAC).
+//
+// Hence, we expose individual queries (where we can internally perform the
+// joins) and allow users to customize (select the projections, group-by
+// expressions, filters, sorting) them.
+//
+// At the same time, we want to make the effort of implementing a UI for this
+// as easy as possible. A reasonable presentation of data should be achievable
+// without any a-priori knowledge of the query. At the same time, UI
+// implementations of specific queries should be able to use helper functions
+// to make such implementations as easy to write as possible.
+//
+// Above approach also allows us to build things incrementally, i.e., start
+// with specific queries (e.g., TLS weak versions) and generalize them as
+// use-cases arise (e.g., general TLS query). The old specific queries can be
+// deprecated but also (internally) implemented using the more generic queries
+// so that we have only a single instance of code for both the new and the old.
+//
+// In addition to query parametrization, enabling user exploration requires the
+// ability to move from one query to another. The idea is to base our approach
+// on a common type system. Roughly:
+//  We start with a universal set of "universal" filters that apply to all queries.
+// These might be:
+//    - time range
+//    - namespaces (also for RBAC)
+//
+// If a query has a result that is of type "PodName", you can construct a
+// filter based on this result and perform another query using this new filter
+// and the universal filters as a starting point.  All filters will be tunable
+// so when the second query is created you would be able to: modify all filters
+// (universal and query-specific). Then, we can think of user exploration as
+// moving from the results of one query to the other.
+//
+// Type system
+// ===========
+// We use a simple type-system to enable the UI to be agnostic to the specific
+// queries as much as possible.
+//
+// Field types and function types are different.
+// Field types can be either a basic type (e.g., string) or a defined type
+// (e.g., podname, with an underlying type of string).
+// If we need to, we can extend Field types to include other things such as
+// tuples but this is out of scope for now.
+//
+// Function types have the types for arguments and results, and a marker on
+// whether they are aggregate functions. (the latter helps with fields when
+// there are group_by components in a query.)
+//
+// Proper type-checking for functions, however, is hard, especially since SQL
+// supports polymorphic functions. We would need a type-system that supports
+// subtyping and some form of covariance and contravariance [1] to get this
+// right, which is out of scope (at least for now). To deal with these cases,
+// we add an AnyType. AnyType blindly matches everything. It is still possible
+// to do type-checking at query construction time, where we know all the
+// argument types.
+//
+// [1] https://en.wikipedia.org/wiki/Covariance_and_contravariance_(computer_science)
+//
+// It might be possible to use the protobuf type system
+// https://pkg.go.dev/google.golang.org/protobuf/types/known/typepb#Type.
+
+syntax = "proto3";
+
+package timescape.v0;
+
+import "google/protobuf/wrappers.proto";
+import "timescape/v0/time_filter.proto";
+
+option go_package = "github.com/isovalent/hubble-timescape/api/timescape/v0";
+
+// QueryService is a service that allows to build complex queries to retrieve
+// data.
+service QueryService {
+  // GetQueriesInfo retruns information about supported queries
+  rpc GetQueriesInfo(GetQueriesInfoRequest) returns (GetQueriesInfoResponse) {}
+  // Query performs a query
+  rpc Query(QueryRequest) returns (stream QueryResponse) {}
+}
+
+// QueryRequest is a request to execute a query
+//
+// Think of it as:
+// SELECT <items> FROM <query> [GROUP BY <group_by>] [WHERE <filter>] [SORT BY <tuple>] [LIMIT <limit>]
+//
+// Notes:
+//   - item names should not collide with other unit names (unless they are the same field)
+//   - group_by and filter expressions may refer to both field names and item names.
+message QueryRequest {
+  // query to use
+  string name = 1;
+
+  // items are the projections of the query
+  repeated QueryItem items = 2;
+  // group_by is used to aggregate results using GROUP BY
+  repeated Expr group_by = 3;
+
+  // Filters:
+  // There are two types of filters:
+  //  - basic filters (time range and namespaces)
+  //  - generic filter (arbitrary expression, which is specific to each query)
+  //
+  // Why have basic filters? We could add the basic filters into the
+  // generic expression. The problem with this would be that we would not
+  // be able to easily extract the specific restrictions set for time and
+  // namespaces from the expression. Doing so is useful for RBAC
+  // (namespaces) and for generating queries from other queries by using
+  // the same time range. That is, a result from one query can be used to
+  // generate another query to allow users to jump from query to query
+  // and interactively explore data. Having a generic time filter allows
+  // us to easily maintain the time range (as well as the namespace
+  // filter) when going from one query, to another.
+  //
+  // TODO: post-grouping-filters (HAVING) is something that we will
+  // probably need at some point, but is not currently implemented. These
+  // are filters will be applied after the grouping.
+  // Expr grouped_filter = 1000;
+
+  // time_filter is the basic query filter
+  TimeFilter time_filter = 4;
+  // namespace_filter is the basic namespace filter
+  repeated string namespace_filter = 5;
+  // query_filter is a generic filter, implemented as an expression using
+  // constructs from query info. It will be type-checked at query
+  // execution time.
+  Expr query_filter = 6;
+
+  // OrderBy orders the results.
+  OrderExpr order_by = 7;
+
+  // Limit limits the results
+  google.protobuf.UInt32Value limit = 8;
+  // TODO: in addition to limit we will need pagination support.
+  // See: https://github.com/isovalent/hubble-timescape/issues/422 for some ideas.
+}
+
+// QueryResponse encodes the results of the query (typically one row per response)
+message QueryResponse {
+  // data are the results encoded in gob
+  //
+  // NB(kkourt): there are a couple options to encode generic results:
+  // JSON, gob, msgpack, gRPC's Any, and others. Chose gob for now as a
+  // placeholder, and we can revisit.
+  bytes data = 1;
+}
+
+// FieldType is the type of a field
+message FieldType {
+  // underlying_type is the underlying type
+  oneof underlying_type {
+    // basic is a basic type
+    BasicType basic = 1;
+    // defined is a defined type
+    DefinedType defined = 2;
+    // array is an array
+    ArrayType array = 3;
+    // any is a type that will match anything (used in function types)
+    AnyType any = 4;
+  }
+}
+
+// BasicType defines the basic types
+enum BasicType {
+  // BASIC_TYPE_UNSPECIFIED is an unspecified type
+  BASIC_TYPE_UNSPECIFIED = 0;
+  // BASIC_TYPE_STRING is a string
+  BASIC_TYPE_STRING = 1;
+  // BASIC_TYPE_INT32 is an int32
+  BASIC_TYPE_INT32 = 2;
+  // BASIC_TYPE_INT64 is an int64
+  BASIC_TYPE_INT64 = 3;
+  // BASIC_TYPE_BOOLEAN is a boolean
+  BASIC_TYPE_BOOLEAN = 4;
+  // BASIC_TYPE_TIMESTAMP is a timestamp
+  BASIC_TYPE_TIMESTAMP = 5;
+}
+
+// AnyType is meant for specifying function argument types, and it can match any type
+message AnyType {}
+
+// DefinedType is a type definition
+message DefinedType {
+  // name is the name of the defined type
+  string name = 1;
+  // type is the underlying type of the defined type
+  FieldType type = 2;
+}
+
+// ArrayType is an array type
+message ArrayType {
+  // type is the underlying type of the array
+  FieldType type = 1;
+}
+
+// FunctionType is a function type
+message FunctionType {
+  // result_type is the result type of the function
+  FieldType result_type = 1;
+  // arg_types are the result types of the arguments
+  repeated FieldType arg_types = 2;
+  // aggregate marks whether this is an aggregate function. This allows to
+  // check whether something can be used in group-by queries.
+  bool aggregate = 3;
+}
+
+// Query descriptions
+// ==================
+// Each query is described via a QueryInfo structure that specifies what fields
+// and functions are supported.
+
+// Field is a field definition
+message Field {
+  // name is a short name of this field.
+  string name = 1;
+  // type is the type of the field
+  FieldType type = 2;
+  // description provides a helper description (intended to be user-facing)
+  string description = 3;
+}
+
+// Function is a function definition
+message Function {
+  // name is the name of the function.
+  string name = 1;
+  // type is the type of the function
+  FunctionType type = 2;
+  // description provides a helper description (intended to be user-facing)
+  string description = 3;
+}
+
+// QueryInfo describes a query
+message QueryInfo {
+  // name is a short name of the query. It's unique among all queries
+  string name = 1;
+  // fields contains available fields for this query
+  repeated Field fields = 2;
+
+  // functions contains available functions for this query
+  // Why do we need this? we want to:
+  //   - avoid users calling arbitrary SQL functions
+  //   - support timescape-specific functions that might be translated into complex SQL expressions
+  //   - provide UI with hints about what queries can be built
+  //   - do some simple type-checking on user-provided queries to improve UX
+  repeated Function functions = 3;
+
+  // description provides a helper description (intended to be user-facing)
+  string description = 4;
+}
+
+// GetQueriesInfoRequest is a request for query information
+message GetQueriesInfoRequest {
+  // if no names are specified, all available queries are returned
+  repeated string names = 1;
+}
+
+// GetQueriesInfoResponse is a response that includes query information
+message GetQueriesInfoResponse {
+  // query_info is the query information
+  repeated QueryInfo query_info = 1;
+}
+
+// Executing queries
+// =================
+// queries are build using expressions composed of query fields and function calls.
+
+// ExprField is a field expression
+message ExprField {
+  // name is the name of the field
+  string name = 1;
+}
+
+// ExprCall is a function call expression
+message ExprCall {
+  // func_name is the name of the function
+  string func_name = 1;
+  // args are the arguments of the function
+  repeated Expr args = 2;
+}
+
+// ExprCmp is equality and inqequality expressions
+message ExprCmp {
+  // NB: we don't need all these (many of them can be generated by
+  // combining others) operators, but it's more convenient to structure
+  // them like that to make the UI's work easier.
+  enum Op {
+    // OP_UNSPECIFIED is unspecified
+    OP_UNSPECIFIED = 0;
+    // OP_EQUAL is ==
+    OP_EQUAL = 1;
+    // OP_NOT_EQUAL is !=
+    OP_NOT_EQUAL = 2;
+    // OP_LESS_THAN is <
+    OP_LESS_THAN = 3;
+    // OP_LEQ_THAN is <=
+    OP_LEQ_THAN = 4;
+    // OP_GREATER_THAN is >
+    OP_GREATER_THAN = 5;
+    // OP_GEQ_THAN is >=
+    OP_GEQ_THAN = 6;
+  }
+  // op is operation
+  Op op = 1;
+  // lhs is left-hand side argument
+  Expr lhs = 2;
+  // rhs is right-hand side argument
+  Expr rhs = 3;
+}
+
+// ExprAND is an AND expression
+message ExprAND {
+  // exprs are the arguments
+  repeated Expr exprs = 1;
+}
+
+// ExprOR is an OR expression
+message ExprOR {
+  // exprs are the arguments
+  repeated Expr exprs = 1;
+}
+
+// ExprNOT is a NOT expr
+message ExprNOT {
+  // expr is the argument
+  Expr expr = 1;
+}
+
+// Expr is an expression
+message Expr {
+  // expr specifies the expression
+  //
+  // NB(kkourt): we start with a basic set of expressions. We can add
+  // others if the need arises, but these should be enough for now.
+  oneof expr {
+    // field is a field expression
+    ExprField field = 1;
+    // call is a call expression
+    ExprCall call = 2;
+    // cmp is a compare (equality / inequality) expression
+    ExprCmp cmp = 3;
+    // and is an and expression
+    ExprAND and = 4;
+    // or is an or expression
+    ExprOR or = 5;
+    // not is a not expression
+    ExprNOT not = 6;
+  }
+}
+
+// OrderExpr specifies the order
+message OrderExpr {
+  // tuple is a tuple of expressions on which the order is specified
+  repeated Expr tuple = 1;
+  // Order specifies the order
+  enum Order {
+    // ORDER_UNSPECIFIED is unspecified
+    ORDER_UNSPECIFIED = 0;
+    // ORDER_ASCENDING is ascending order
+    ORDER_ASCENDING = 1;
+    // ORDER_DESCENDING is (you guessed it!) descending order
+    ORDER_DESCENDING = 2;
+  }
+  // order specifies the order
+  Order order = 2;
+}
+
+// QueryItem specifies a item that is returned when the query is executed
+message QueryItem {
+  // item is the expression for this query item
+  Expr item = 1;
+  // name is its name
+  string name = 2;
+}

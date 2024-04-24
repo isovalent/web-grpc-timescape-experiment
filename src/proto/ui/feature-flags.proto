@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package ui;
+
+message GetFeatureFlagsRequest {}
+
+message GetFeatureFlagsResponse {
+	TimescapeFeatureFlag timescape = 1;
+	TimescapeOnlyFeatureFlag timescape_only = 2;
+	GenericFeatureFlag service_map_file_upload = 3;
+	GrafanaFeatureFlag grafana = 4;
+	TetragonFeatureFlag tetragon = 5;
+}
+
+message TimescapeFeatureFlag {
+	bool enabled = 1;
+}
+
+message TimescapeOnlyFeatureFlag {
+	bool enabled = 1;
+}
+
+message GenericFeatureFlag {
+	bool enabled = 1;
+}
+
+message GrafanaFeatureFlag {
+  bool enabled = 1;
+  string dashboard_json = 2;
+  bool enabled_nodes_graph = 3;
+}
+
+message TetragonFeatureFlag {
+	bool only = 1;
+}

@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package timescape.v0;
+
+import "google/protobuf/field_mask.proto";
+import "k8sevent/v1/event.proto";
+import "timescape/v1/time_filter.proto";
+
+option go_package = "github.com/isovalent/hubble-timescape/api/timescape/v0";
+
+// K8sEventService is a service that allows for querying events about
+// Kubernetes resources.
+service K8sEventService {
+  // GetK8sEvents streams events about Kubernetes resources.
+  rpc GetK8sEvents(GetK8sEventsRequest) returns (stream GetK8sEventsResponse) {
+    option deprecated = true;
+  }
+}
+
+// GetK8sEventsRequest for the GetEvents rpc call.
+message GetK8sEventsRequest {
+  option deprecated = true;
+
+  // TimeFilter is a filter that allows to specify a time interval.
+  timescape.v1.TimeFilter time_filter = 1;
+  // Include are filters that events must match.
+  // If multiple include filters are specified, only one of them has to
+  // match for a flow to be included.
+  repeated K8sEventFilter include = 2;
+  // Exclude are filters that events must not match.
+  // If multiple excluded filters are specified, only one of them has to
+  // match for a flow to be excluded.
+  repeated K8sEventFilter exclude = 3;
+  // FieldMask allows clients to limit event fields that will be returned.
+  google.protobuf.FieldMask field_mask = 4;
+  // Limit is the maximum number of events to return
+  uint64 limit = 5;
+}
+
+// EventFilter is a filter to be used in the GetEventsRequest include/exclude fields.
+// All fields are optional. If multiple fields are set, then all fields must
+// match for the filter to match.
+message K8sEventFilter {
+  option deprecated = true;
+
+  // Filter by the k8s resource namespace.
+  repeated string namespace = 3;
+  // Filter by the k8s resource uuid.
+  repeated string resource_uuid = 4;
+  // Filter by the event type.
+  repeated k8sevent.v1.EventType event_type = 5;
+  // Filter by the k8s resource kind.
+  repeated k8sevent.v1.Kind kind = 6;
+  // Filter by the k8s resource cluster.
+  repeated string cluster = 7;
+}
+
+// GetK8sEventsResponse for the GetEvents rpc call.
+message GetK8sEventsResponse {
+  option deprecated = true;
+
+  // Event is the event information.
+  k8sevent.v1.Event event = 1;
+}

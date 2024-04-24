@@ -1,0 +1,345 @@
+// Copyright 2020 Authors of Cilium
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "flow/flow.proto";
+import "observer/observer.proto";
+import "ui/notifications.proto";
+import "ui/status.proto";
+import "ui/process-events.proto";
+import "ui/authorization.proto";
+import "ui/feature-flags.proto";
+import "timescape/v1/container.proto";
+import "timescape/v0/k8s_events.proto";
+import "k8sevent/v1/event.proto";
+import "aggregation/aggregation.proto";
+
+package ui;
+
+service UI {
+  rpc GetEvents(GetEventsRequest) returns (stream GetEventsResponse) {}
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse) {}
+  rpc GetHubbleServerStatus(observer.ServerStatusRequest)
+      returns (observer.ServerStatusResponse) {}
+  rpc GetHubbleNodes(observer.GetNodesRequest)
+      returns (observer.GetNodesResponse) {}
+  rpc GetAuthorization(GetAuthzRequest) returns (GetAuthzResponse) {}
+  rpc GetFeatureFlags(GetFeatureFlagsRequest)
+      returns (GetFeatureFlagsResponse) {}
+  rpc GetTimescapeFlows(GetTimescapeDataRequest)
+      returns (GetTimescapeDataResponse) {}
+  rpc GetTimescapeK8SEvents(timescape.v0.GetK8sEventsRequest)
+      returns (GetTimescapeK8SEventsResponse) {}
+  rpc GetTimescapeFlowStats(GetTimescapeDataRequest)
+      returns (GetTimescapeDataResponse) {}
+  rpc GetFullFlow(GetFullFlowRequest) returns (GetFullFlowResponse) {}
+  rpc GetControlStream(GetControlStreamRequest)
+      returns (stream GetControlStreamResponse);
+  rpc GetTimescapePods(GetTimescapePodsRequest)
+      returns (GetTimescapePodsResponse);
+  rpc GetTimescapeProcessEvents(GetTimescapeProcessEventsRequest)
+      returns (stream GetTimescapeProcessEventsResponse) {}
+  rpc GetServiceMapFromLogs(GetServiceMapFromLogsRequest)
+      returns (GetServiceMapFromLogsResponse) {}
+}
+
+// Here I didn't include "follow", "until", and "number". This request assumes
+// follow, and lets the client decide when to end the request, whether it's
+// based on timestamp or the number of responses received.
+message GetEventsRequest {
+  // EventType specifies which types of events to subscribe to. If unspecified,
+  // the request is subscribed to all the event types.
+  repeated EventType event_types = 1;
+  repeated EventFilter blacklist = 2;
+  repeated EventFilter whitelist = 3;
+  google.protobuf.Timestamp since = 4;
+  GetStatusRequest status_request = 5;
+  isovalent.flow.aggregation.Aggregation aggregation = 10001;
+}
+
+message GetEventsResponse {
+  string node = 1;
+  google.protobuf.Timestamp timestamp = 2;
+
+  repeated Event events = 3;
+}
+
+message Event {
+  oneof event {
+    flow.Flow flow = 3;
+    NamespaceState namespace_state = 4;
+    ServiceState service_state = 5;
+    // It's unclear how we can define what it means for service links to get
+    // added/deleted. For now I'm deferring the decision for whether a
+    // particular link should be included in the service map to the client.
+    // Maybe the server can periodically send service_link events for active
+    // links to keep-alive, and the client can expire older links based on their
+    // timestamp.
+    ServiceLinkState service_link_state = 6;
+    Policies policies = 7;
+    Flows flows = 8;
+    Notification notification = 9;
+  }
+}
+
+message Flows { repeated flow.Flow flows = 1; }
+message Policies { repeated PolicySpecState policies = 1; }
+
+// Here I added different filter types for different events. Another option is
+// to reuse and extend FlowFilter to filter all the events, but I worry that it
+// might become too confusing in terms of figuring out which filter fields apply
+// to which events.
+message EventFilter {
+  oneof filter {
+    flow.FlowFilter flow_filter = 2;
+    ServiceFilter service_filter = 3;
+    ServiceLinkFilter service_link_filter = 4;
+    PolicySpecFilter policy_spec_filter = 5;
+  }
+}
+
+enum EventType {
+  UNKNOWN_EVENT = 0;
+  FLOW = 1;
+  K8S_NAMESPACE_STATE = 2;
+  SERVICE_STATE = 3;
+  SERVICE_LINK_STATE = 4;
+  POLICY_STATE = 5;
+  FLOWS = 6;
+  STATUS = 7;
+}
+
+message NamespaceDescriptor {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Timestamp creation_timestamp = 3;
+  bool timescape = 4;
+}
+
+message NamespaceState {
+  NamespaceDescriptor namespace = 1;
+  StateChange type = 2;
+}
+
+// IP protocols. The values of enums do not correspond to actual IP protocol
+// numbers.
+enum IPProtocol {
+  UNKNOWN_IP_PROTOCOL = 0;
+  TCP = 1;
+  UDP = 2;
+  ICMP_V4 = 3;
+  ICMP_V6 = 4;
+}
+
+// Come up with a better name for Service.
+message Service {
+  // An opaque ID that uniquely identifies the service.
+  string id = 1;
+  string name = 2;
+  string namespace = 3;
+  repeated string labels = 4;
+  repeated string dns_names = 5;
+  bool egress_policy_enforced = 6;
+  bool ingress_policy_enforced = 7;
+  // This is a string instead of boolean because Cilium reports status message.
+  // If it's successfully enabled, this string is set to "OK" I think.
+  string visibility_policy_status = 8;
+  // We probably can't reliably set creation timestamp.
+  google.protobuf.Timestamp creation_timestamp = 9;
+  repeated flow.Workload workloads = 10;
+  uint32 identity = 12;
+}
+
+message ServiceState {
+  Service service = 1;
+  StateChange type = 2;
+}
+
+message ServiceFilter { repeated string namespace = 1; }
+
+message ServiceLink {
+  // An opaque ID that uniquely identifies this link.
+  string id = 1;
+  // source Service id
+  string source_id = 2;
+  // destination Service id
+  string destination_id = 3;
+  uint32 destination_port = 4;
+
+  IPProtocol ip_protocol = 5;
+  flow.Verdict verdict = 6;
+
+  uint64 flow_amount = 7;
+  Latency latency = 8;
+  uint64 bytes_transfered = 9;
+
+  flow.AuthType auth_type = 10;
+  bool is_encrypted = 11;
+
+  message Latency {
+    google.protobuf.Duration min = 1;
+    google.protobuf.Duration max = 2;
+    google.protobuf.Duration avg = 3;
+  }
+}
+
+message ServiceLinkState {
+  ServiceLink service_link = 1;
+  StateChange type = 2;
+}
+
+message ServiceLinkFilter {
+  repeated ServiceFilter source = 1;
+  repeated ServiceFilter destination = 2;
+  // Use string here to support things like port ranges (e.g. 100-200).
+  repeated string destination_port = 3;
+  repeated flow.Verdict verdict = 4;
+}
+
+message PolicySpec {
+  string policyNamespace = 1;
+  string policyName = 2;
+  PolicySpecType type = 3;
+  string yaml = 4;
+  string uid = 5;
+}
+
+enum PolicySpecType {
+  CILIUM_NETWORK_POLICY = 0;
+  KUBERNETES_NETWORK_POLICY = 1;
+  CILIUM_CLUSTERWIDE_NETWORK_POLICY = 2;
+}
+
+message PolicySpecState {
+  PolicySpec policy_spec = 1;
+  StateChange type = 2;
+}
+
+message PolicySpecFilter {
+  repeated string policyNamespace = 1;
+  repeated string policyName = 2;
+  repeated PolicySpecType type = 3;
+}
+
+enum StateChange {
+  UNKNOWN_STATE_CHANGE = 0;
+  ADDED = 1;
+  MODIFIED = 2;
+  DELETED = 3;
+  // This is needed in case the relay server knows that the service exists,
+  // but it doesn't know when it got created.
+  EXISTS = 4;
+}
+
+message GetTimescapeDataRequest {
+  observer.GetFlowsRequest flows_request = 1;
+  LastDatumSeen last_seen = 2;
+  bool last_flow_seen_filled = 3;
+  int32 limit = 4;
+
+  message LastDatumSeen {
+    string id = 1;
+    google.protobuf.Timestamp timestamp = 2;
+  }
+}
+
+message GetTimescapeDataResponse {
+  repeated flow.Flow flows = 1;
+
+  // NOTE: this fields seem to be redundant as services and links should be
+  // NOTE: streamed. So, consider it to remove.
+  repeated Service service = 2;
+  repeated ServiceLink service_link = 3;
+  repeated NamespaceDescriptor namespaces = 4;
+
+  repeated CountStats count_stats = 5;
+  repeated FlowSummary flow_summaries = 6;
+}
+
+message GetFullFlowRequest { string flow_summary_id = 1; }
+
+message GetFullFlowResponse {
+  flow.Flow flow = 1;
+  bool found = 2;
+}
+
+message CountStats {
+  google.protobuf.Timestamp timestamp = 1;
+  int32 count = 2;
+}
+
+message FlowSummary {
+  string id = 1;
+  google.protobuf.Timestamp time = 2;
+
+  string source_pod = 3;
+  repeated string source_labels = 4;
+  string source_ip = 5;
+
+  string destination_pod = 6;
+  repeated string destination_labels = 7;
+  string destination_ip = 8;
+  uint32 destination_port = 9;
+
+  flow.Verdict verdict = 10;
+  flow.TCPFlags tcp_flags = 11;
+  HasProps has = 12;
+
+  message HasProps {
+    bool destination_port = 1;
+    bool tcp_flags = 2;
+  }
+
+  repeated string destination_names = 14;
+
+  repeated flow.Workload source_workloads = 15;
+  repeated flow.Workload destination_workloads = 16;
+
+  flow.AuthType auth_type = 17;
+}
+
+message GetControlStreamRequest {}
+message GetControlStreamResponse {
+  oneof event {
+    NamespaceStates namespaces = 1;
+    Notification notification = 2;
+  }
+
+  message NamespaceStates { repeated NamespaceState namespaces = 1; }
+}
+
+message GetTimescapePodsRequest {
+  timescape.v1.GetContainersFromEventsRequest request = 1;
+}
+
+message GetTimescapePodsResponse {
+  timescape.v1.GetContainersFromEventsResponse response = 1;
+}
+
+message GetServiceMapFromLogsRequest {
+  bytes logs = 1;
+
+  repeated EventFilter blacklist = 2;
+  repeated EventFilter whitelist = 3;
+}
+
+message GetServiceMapFromLogsResponse {
+  repeated Service services = 1;
+  repeated ServiceLink links = 2;
+}
+
+message GetTimescapeK8SEventsResponse { repeated k8sevent.v1.Event events = 1; }

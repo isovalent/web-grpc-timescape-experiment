@@ -1,0 +1,112 @@
+// Copyright (C) Isovalent, Inc. - All Rights Reserved.
+//
+// NOTICE: All information contained herein is, and remains the property of
+// Isovalent Inc and its suppliers, if any. The intellectual and technical
+// concepts contained herein are proprietary to Isovalent Inc and its suppliers
+// and may be covered by U.S. and Foreign Patents, patents in process, and are
+// protected by trade secret or copyright law.  Dissemination of this
+// information or reproduction of this material is strictly forbidden unless
+// prior written permission is obtained from Isovalent Inc.
+
+syntax = "proto3";
+
+package timescape.v1;
+
+import "google/protobuf/field_mask.proto";
+import "k8sevent/v1/event.proto";
+import "timescape/v1/time_filter.proto";
+
+option go_package = "github.com/isovalent/hubble-timescape/api/timescape/v1";
+
+// K8sEventService is a service that allows for querying events about
+// Kubernetes resources.
+service K8sEventService {
+  // GetK8sEvents streams events about Kubernetes resources.
+  //
+  // # Experimental
+  //
+  // Notice: This rpc is EXPERIMENTAL and may be changed or removed in a
+  // later release.
+  rpc GetK8sEvents(GetK8sEventsRequest) returns (stream GetK8sEventsResponse) {}
+}
+
+// GetK8sEventsRequest for the GetEvents rpc call.
+message GetK8sEventsRequest {
+  // TimeFilter is a filter that allows to specify a time interval.
+  timescape.v1.TimeFilter time_filter = 1;
+
+  // Include are filters that events must match.
+  // If multiple include filters are specified, only one of them has to
+  // match for a flow to be included.
+  repeated K8sEventFilter include = 2;
+
+  // Exclude are filters that events must not match.
+  // If multiple excluded filters are specified, only one of them has to
+  // match for a flow to be excluded.
+  repeated K8sEventFilter exclude = 3;
+
+  // FieldMask allows clients to limit event fields that will be returned.
+  google.protobuf.FieldMask field_mask = 4;
+
+  // Limit is the maximum number of events to return
+  uint64 limit = 5;
+
+  // Event fields to distinct by
+  repeated EventField distinct_on = 6;
+}
+
+// EventFilter is a filter to be used in the GetEventsRequest include/exclude fields.
+// All fields are optional. If multiple fields are set, then all fields must
+// match for the filter to match.
+message K8sEventFilter {
+  // Filter by the name of the k8s event.
+  repeated string name = 1;
+  // Filter by the k8s resource namespace.
+  repeated string namespace = 2;
+  // Filter by the k8s resource uuid.
+  repeated string resource_uuid = 3;
+  // Filter by the event type.
+  repeated k8sevent.v1.EventType event_type = 4;
+  // Filter by the k8s resource kind.
+  repeated k8sevent.v1.Kind kind = 5;
+  // Filter by the k8s resource cluster.
+  repeated string cluster = 6;
+}
+
+// GetK8sEventsResponse for the GetEvents rpc call.
+message GetK8sEventsResponse {
+  // Event is the event information.
+  k8sevent.v1.Event event = 1;
+}
+
+// Subset of the fields from k8sevent.v1.Event
+//
+// Some indices are skipped to make sure there match the indexes on message
+// Event upstream.
+enum EventField {
+  // Unknown field
+  EVENT_FIELD_UNSPECIFIED = 0;
+
+  // 1 is skipped
+
+  // Event type
+  EVENT_FIELD_EVENT_TYPE = 2;
+  // Kubernetes resource version.
+  EVENT_FIELD_RESOURCE_VERSION = 3;
+  // Resource UUID;
+  EVENT_FIELD_RESOURCE_UUID = 4;
+  // API version of the resource.
+  EVENT_FIELD_API_VERSION = 5;
+  // Kubernetes kind of the resource.
+  EVENT_FIELD_KIND = 6;
+  // Name is the name of the Kubernetes resource resource the event was about.
+  EVENT_FIELD_NAME = 7;
+  // Namespace of the Kubernetes resource resource the event
+  // was about.
+  EVENT_FIELD_NAMESPACE = 8;
+
+  // 9-11 skipped
+
+  // Cluster name where Kubernetes event occurred.
+  EVENT_FIELD_CLUSTER = 12;
+}

@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+import "timescape/v1/container.proto";
+import "tetragon/events.proto";
+
+package ui;
+
+message GetTimescapeProcessEventsRequest {
+  timescape.v1.EventsContainerInfo container = 1;
+}
+
+message GetTimescapeProcessEventsResponse {
+  repeated tetragon.GetEventsResponse events = 1;
+}

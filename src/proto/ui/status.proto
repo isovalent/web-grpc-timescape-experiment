@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+import "observer/observer.proto";
+
+package ui;
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+	observer.GetNodesResponse nodes = 1;
+  observer.ServerStatusResponse server_status = 2;
+
+	repeated DeployedComponent versions = 3;
+	FlowStats flows = 4;
+}
+
+message NodeStatus {
+	string name = 1;
+	bool is_available = 2;
+}
+
+message DeployedComponent {
+	string name = 1;
+	string version = 2;
+}
+
+message FlowStats {
+	float per_second = 1;
+}

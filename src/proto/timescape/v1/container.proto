@@ -1,0 +1,173 @@
+// Copyright (C) Isovalent, Inc. - All Rights Reserved.
+//
+// NOTICE: All information contained herein is, and remains the property of
+// Isovalent Inc and its suppliers, if any. The intellectual and technical
+// concepts contained herein are proprietary to Isovalent Inc and its suppliers
+// and may be covered by U.S. and Foreign Patents, patents in process, and are
+// protected by trade secret or copyright law.  Dissemination of this
+// information or reproduction of this material is strictly forbidden unless
+// prior written permission is obtained from Isovalent Inc.
+
+syntax = "proto3";
+
+package timescape.v1;
+
+import "google/protobuf/timestamp.proto";
+import "tetragon/events.proto";
+import "tetragon/tetragon.proto";
+import "timescape/v1/time_filter.proto";
+
+option go_package = "github.com/isovalent/hubble-timescape/api/timescape/v1";
+
+// ContainerService is a service that offers container related information such
+// as events and processes.
+service ContainerService {
+  // GetContainersFromEvents returns events calls (i.e calls for querying FGS
+  // event data) returns a list of containers that match given filters.
+  rpc GetContainersFromEvents(GetContainersFromEventsRequest) returns (GetContainersFromEventsResponse) {}
+  // GetContainerEvents returns events related to a given container.
+  rpc GetContainerEvents(GetContainerEventsRequest) returns (stream GetContainerEventsResponse) {}
+  // GetProcessAncestors returns process ancestors.
+  // The result will:
+  //  - include the process (P) with the exec_id in the request
+  //  - will be sorted as: P, parent of P, grandparent of P, ...
+  rpc GetProcessAncestors(GetProcessAncestorsRequest) returns (GetProcessAncestorsResponse) {}
+}
+
+// GetContainersFromEventsRequest is the request parameter for the
+// FromEvents RPC endpoint.
+message GetContainersFromEventsRequest {
+  // time_filter allows to filter by time.
+  TimeFilter time_filter = 1;
+
+  // results_limit limits the number of containers to return from the call.
+  // NB: This request will return a number of containers (rather than a
+  // stream), so we need to bound the results. Note that ResultsOrder will
+  // determine what results will be dropped if we have more results than the
+  // limit.
+  uint32 results_limit = 2;
+  // ResultsOrder is an enum that defines results ordering.
+  enum ResultsOrder {
+    // RESULTS_ORDER_UNSPECIFIED means that no particular order should be
+    // assumed.
+    RESULTS_ORDER_UNSPECIFIED = 0;
+    // RESULTS_ORDER_CONTAINER_START_TIME_ASCENDING means that results are
+    // sorted by container start time in ascending order.
+    RESULTS_ORDER_CONTAINER_START_TIME_ASCENDING = 1;
+    // RESULTS_ORDER_CONTAINER_START_TIME_DESCENDING means that results are
+    // sorted by container start time in descending order.
+    RESULTS_ORDER_CONTAINER_START_TIME_DESCENDING = 2;
+  }
+  // results_order specifies the expected order of the results.
+  ResultsOrder results_order = 3;
+
+  // allow_list is a set of filters that containers must match.
+  repeated EventsContainersFilter allow_list = 4;
+  // TODO: deny_list
+}
+
+// GetContainersFromEventsResponse is the response to the
+// GetContainersFromEvents RPC endpoint.
+message GetContainersFromEventsResponse {
+  // containers is a list of containers that match the request.
+  repeated EventsContainerInfo containers = 1;
+}
+
+// GetContainerEventsRequest is the request parameter for the
+// GetContainerEvents RPC endpoint.
+message GetContainerEventsRequest {
+  // EventsContainerInfo specifies information to identify a container from
+  // which to see the list of related events.
+  EventsContainerInfo container = 1;
+  // allow_list is a list of filters that must be matched by the target
+  // container.
+  repeated EventFilter allow_list = 2;
+  // TODO: deny_list, reserved = 3;
+
+  // Reduce allows for additional control over the amount of the
+  // returned data.
+  ContainerEventsReduce reduce = 4;
+}
+
+// ContainerEventsReduce allows for additional control over the amount of the
+// returned data.
+message ContainerEventsReduce {
+  // Mode controls the number of returned container events.
+  ContainerEventsMode mode = 1;
+}
+
+// ContainerEventsMode
+enum ContainerEventsMode {
+  // If not specified, same as ALL.
+  CONTAINER_EVENTS_MODE_UNSPECIFIED = 0;
+
+  // All found events are going to be returned
+  CONTAINER_EVENTS_MODE_ALL = 1;
+
+  // Only distinct events are going to be preset in the returned set.
+  //
+  // Particularly useful to reduce the number of CONNECT event types which may
+  // use a repeat destination a lot.
+  CONTAINER_EVENTS_MODE_DESTINATION = 2;
+}
+
+// GetContainerEventsResponse is the respponse returned from the
+// GetContainerEvents RPC call.
+message GetContainerEventsResponse {
+  // event is typically a TLS or process event.
+  tetragon.GetEventsResponse event = 1;
+}
+
+// GetProcessAncestorsRequest is the request parameter for the
+// GetProcessAncestors RPC endpoint.
+message GetProcessAncestorsRequest {
+  // exec_id is the execution ID of the process from which to get the list of
+  // ancestors.
+  string exec_id = 1;
+  // namespace is the namespace in which the container runs (or ran). If empty,
+  // the request will be satisfied only with the exec_id.
+  string namespace = 2;
+}
+
+// GetProcessAncestorsResponse is the response of the GetProcessAncestors RPC
+// endpoint.
+message GetProcessAncestorsResponse {
+  // ancestors is a list of ancestor processes.
+  repeated tetragon.Process ancestors = 1;
+}
+
+// EventsContainersFilter is a filter for container information as can be found
+// in FGS events.
+message EventsContainersFilter {
+  // namespaces is a list of namespaces that can be used for filtering
+  // containers.
+  repeated string namespaces = 1;
+}
+
+// EventsContainerInfo contains container information retreived from FGS event
+// data.
+//
+// Fields below serve two purposes: provide basic container information, but
+// also uniquely identify a container in FGS data. What exists now should be
+// OK, but we might want to revisit this.
+message EventsContainerInfo {
+  // namespace is the namespace in which the container runs (or ran).
+  string namespace = 1;
+  // pod_name is the name of the pod in which the container runs (or ran).
+  string pod_name = 2;
+  // node_name is the name of the node on which the pod, and thus container,
+  // runs (or ran).
+  string node_name = 3;
+  // image_id identifies a container image.
+  string image_id = 4;
+  // start_time corresponds to the time at which the container was starter.
+  google.protobuf.Timestamp start_time = 5;
+}
+
+// EventFilter is a filter for events.
+message EventFilter {
+  // event_set specifiies a list of events that must (or must not) match the
+  // filter.
+  repeated tetragon.EventType event_set = 1;
+  // TODO: more filters (e.g., implement tetragon.Filter)
+}
